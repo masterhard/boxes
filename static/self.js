@@ -121,6 +121,7 @@ function refreshPreview() {
 
     const preview = document.getElementById("preview_img");
     preview.src = url;
+    if (window.refresh3D) window.refresh3D();
 }
 
 function togglePreview() {

@@ -380,10 +380,10 @@ class Boxes:
         defaultgroup = self.argparser.add_argument_group(
                         "Default Settings")
         defaultgroup.add_argument(
-            "--thickness", action="store", type=float, default=3.0,
+            "--thickness", action="store", type=float, default=1.5,
             help="thickness of the material (in mm) [\U0001F6C8](https://florianfesti.github.io/boxes/html/usermanual.html#thickness)")
         defaultgroup.add_argument(
-            "--burn", action="store", type=float, default=0.1,
+            "--burn", action="store", type=float, default=0.06,
             help='burn correction (in mm)(bigger values for tighter fit) [\U0001F6C8](https://florianfesti.github.io/boxes/html/usermanual.html#burn)')
         defaultgroup.add_argument(
             "--format", action="store", type=str, default="svg",

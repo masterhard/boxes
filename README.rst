@@ -1,3 +1,11 @@
+About this fork
+===============
+This fork adds 99% vibe-coded FlexibleOrganizer box that makes rectangular desktop organizers with compartment of varying sizes and height. Concieved by Gemini and raised by Claude.
+
+.. image :: static/samples/FlexibleOrganizer-thumb.jpg
+
+You can find it in `Trays and Drawer Inserts` section.
+
 About Boxes.py
 ==============
 

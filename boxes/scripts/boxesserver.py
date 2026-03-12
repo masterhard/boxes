@@ -20,6 +20,7 @@ import gettext
 import glob
 import html
 import io
+import json
 import mimetypes
 import os.path
 import re
@@ -225,6 +226,160 @@ class BServer:
 
         return self.args2html(name, box, lang, action, defaults)
 
+    def gen3DViewerHTML(self, action: str) -> str:
+        return f'''<div id="viewer3d-container" style="margin-top:8px; width:600px;display:inline-block;">
+  <div style="padding:4px 0; font-size:small; color:#888;">3D Preview &mdash; drag to rotate &bull; scroll to zoom &bull; right-drag to pan</div>
+  <canvas id="viewer3d" style="width:100%; height:450px; display:block; border-radius:4px; background:#2d2d2d;"></canvas>
+</div>
+<script type="importmap">
+{{"imports": {{
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+}}}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {{OrbitControls}} from 'three/addons/controls/OrbitControls.js';
+
+const canvas = document.getElementById('viewer3d');
+const renderer = new THREE.WebGLRenderer({{canvas, antialias: true}});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2d2d2d);
+
+const camera = new THREE.PerspectiveCamera(45, 2, 0.1, 50000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(1, 2, 1.5);
+scene.add(sun);
+
+const wallMat = new THREE.MeshLambertMaterial({{color: 0xc4a265}});
+const baseMat = new THREE.MeshLambertMaterial({{color: 0x9a7248}});
+const edgeMat = new THREE.LineBasicMaterial({{color: 0x000000, transparent: true, opacity: 0.25}});
+
+let wallGroup = null;
+let cameraFitted = false;
+
+function addEdges(mesh) {{
+  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), edgeMat));
+}}
+
+function buildScene(data) {{
+  if (wallGroup) scene.remove(wallGroup);
+  wallGroup = new THREE.Group();
+  const t = data.t;
+
+  // Base plate — expanded by t/2 on each side to sit flush under the perimeter walls
+  const base = new THREE.Mesh(new THREE.BoxGeometry(data.w + t, t, data.h + t), baseMat);
+  base.position.set(data.w / 2, -t / 2, data.h / 2);
+  addEdges(base);
+  wallGroup.add(base);
+
+  for (const wall of data.walls) {{
+    const prof = wall.profile;
+    let cumul = 0;
+    for (let i = 0; i < prof.length; i++) {{
+      const origLen = prof[i][0], height = prof[i][1];
+      if (height < 0.01 || origLen < 0.01) {{ cumul += origLen; continue; }}
+      // Extend first and last segments by t/2 outward so walls overlap
+      // at their joints instead of stopping at the inner face.
+      const es = (i === 0) ? t / 2 : 0;
+      const ee = (i === prof.length - 1) ? t / 2 : 0;
+      const len = origLen + es + ee;
+      const start = cumul - es;
+      let mesh;
+      if (wall.axis === 'h') {{
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(len, height, t), wallMat);
+        mesh.position.set(wall.x + start + len / 2, height / 2, wall.y);
+      }} else {{
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(t, height, len), wallMat);
+        mesh.position.set(wall.x, height / 2, wall.y + start + len / 2);
+      }}
+      addEdges(mesh);
+      wallGroup.add(mesh);
+      cumul += origLen;
+    }}
+  }}
+
+  // Lids — semi-transparent plates at compartment height.
+  // Leaf boundaries touch perimeter wall CENTERS but internal divider INNER FACES,
+  // so only expand by t/2 at perimeter edges.
+  const lidMat = new THREE.MeshLambertMaterial({{color: 0xc4a265, transparent: true, opacity: 0.55}});
+  const eps = 0.5;
+  for (const lid of (data.lids || [])) {{
+    const xl = lid.x - (lid.x < eps ? t / 2 : t);
+    const xr = lid.x + lid.w + (lid.x + lid.w > data.w - eps ? t / 2 : t);
+    const yl = lid.y - (lid.y < eps ? t / 2 : t);
+    const yr = lid.y + lid.h + (lid.y + lid.h > data.h - eps ? t / 2 : t);
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(xr - xl, t, yr - yl), lidMat);
+    mesh.position.set((xl + xr) / 2, lid.z + t / 2, (yl + yr) / 2);
+    addEdges(mesh);
+    wallGroup.add(mesh);
+  }}
+
+  wallGroup.scale.x = -1;
+  wallGroup.rotation.y = Math.PI;
+  scene.add(wallGroup);
+
+  if (!cameraFitted) {{
+    cameraFitted = true;
+    const box3 = new THREE.Box3().setFromObject(wallGroup);
+    const center = box3.getCenter(new THREE.Vector3());
+    const size = box3.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    camera.position.set(center.x + maxDim * 1.1, center.y + maxDim * 0.9, center.z + maxDim * 1.3);
+    camera.lookAt(center);
+    controls.target.copy(center);
+    controls.update();
+  }}
+}}
+
+window.refresh3D = function() {{
+  const form = document.querySelector('#arguments');
+  if (!form) return;
+  const fd = new FormData(form);
+  fd.set('format', 'svg');
+  fetch('{action}?' + new URLSearchParams(fd).toString() + '&render=5')
+    .then(r => r.json())
+    .then(data => buildScene(data))
+    .catch(e => console.warn('3D fetch failed:', e));
+}};
+
+// Resize Three.js renderer when canvas changes size
+const ro = new ResizeObserver(() => {{
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+}});
+ro.observe(canvas);
+
+(function sizeOnce() {{
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w > 0 && h > 0) {{
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+  }}
+}})();
+
+(function animate() {{
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}})();
+
+window.refresh3D();
+</script>'''
+
     def args2html(self, name, box, lang, action="", defaults={}):
         _ = lang.gettext
         lang_name = lang.info().get('language', None)
@@ -320,6 +475,7 @@ class BServer:
 <img id="preview_img" style="width:100%" src="{self.static_url}/nothing.png">
 </figure>
 </div>
+{self.gen3DViewerHTML(action) if getattr(box.__class__, 'supports_3d', False) else ''}
 </div>
 </body>
 </html>
@@ -713,6 +869,13 @@ class BServer:
             start_response(status, http_headers)
             qrcode = get_qrcode(box.metadata["url_short"], qr_format)
             return (qrcode,)
+
+        if render == "5":
+            data_3d = getattr(box, '_3d_data', {})
+            json_bytes = json.dumps(data_3d).encode('utf-8')
+            http_headers = [('Content-type', 'application/json'), ('X-Robots-Tag', 'noindex,nofollow')]
+            start_response(status, http_headers)
+            return [json_bytes]
 
         if box.format != "svg" or render == "2":
             extension = box.format
